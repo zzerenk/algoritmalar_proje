@@ -11,13 +11,19 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 def load_graph(place_name: str) -> Any:
-    """Fetch raw (unprojected) graph data for a place using OSMnx."""
+    """Fetch raw (unprojected) graph data for a place using OSMnx with speeds and travel times."""
 
     if ox is None:
         raise ImportError("osmnx is required for load_graph")
 
-    # 1) Pull full network (all ways), keep lat/lon as-is (no projection).
     graph = ox.graph_from_place(place_name, network_type="all", simplify=False)
+    # Enrich edges with speed and travel time for completeness.
+    try:
+        graph = ox.add_edge_speeds(graph)
+        graph = ox.add_edge_travel_times(graph)
+    except Exception:
+        # If enrichment fails, continue with base graph.
+        pass
     return graph
 
 
@@ -46,20 +52,35 @@ def load_buildings(place_name: str):
             return None
 
 
-def get_nearest_node(graph: Any, lat: float, lon: float) -> Any:
-    """Return nearest graph node to provided coordinates.
+def get_nearest_node(graph: Any, lat: float, lon: float, max_distance_m: float = 100.0) -> Any:
+    """Return nearest graph node to provided coordinates with a distance threshold.
 
-    Falls back to a pure-Python haversine scan if optional deps (scikit-learn)
-    required by osmnx are missing.
+    If the nearest road node is farther than ``max_distance_m``, returns None or
+    raises ValueError to signal invalid selection.
+    Falls back to a pure-Python haversine scan if optional deps are missing.
     """
 
     if ox is None:
         raise ImportError("osmnx is required for get_nearest_node")
 
     try:
-        return ox.distance.nearest_nodes(graph, lon, lat)
+        node_id = ox.distance.nearest_nodes(graph, lon, lat)
     except Exception:
-        return _nearest_node_haversine(graph, lat, lon)
+        node_id = _nearest_node_haversine(graph, lat, lon)
+
+    if node_id is None:
+        return None
+
+    node_data = graph.nodes[node_id]
+    nlat = node_data.get("y")
+    nlon = node_data.get("x")
+    if nlat is None or nlon is None:
+        return None
+
+    distance_m = _haversine(lat, lon, nlat, nlon)
+    if distance_m > max_distance_m:
+        raise ValueError("Konum yola çok uzak")
+    return node_id
 
 
 def _nearest_node_haversine(graph: Any, lat: float, lon: float) -> Any:

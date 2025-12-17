@@ -8,10 +8,14 @@ from typing import Any, Dict, List, Tuple
 
 
 def get_dist(G: Any, u: Any, v: Any) -> float:
-    """Edge weight helper (defaults to 1.0 if missing)."""
+    """Edge weight helper using edge length (defaults to 1.0 if missing)."""
 
     try:
-        return float(G[u][v][0].get("length", 1.0))
+        edge_data = G.get_edge_data(u, v)
+        if not edge_data:
+            return 1.0
+        first = next(iter(edge_data.values()))
+        return float(first.get("length", 1.0))
     except Exception:
         return 1.0
 
@@ -40,52 +44,54 @@ def _reconstruct_path(parents: Dict[Any, Any], end: Any) -> List[Any]:
 
 
 def dijkstra_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
-    """Dijkstra shortest path with heapq; returns (path, visited_count, total_dist)."""
+    """Dijkstra shortest path; returns (path, visited_count, total_dist)."""
 
     queue: List[Tuple[float, Any]] = [(0.0, start)]
-    distances: Dict[Any, float] = {node: math.inf for node in G.nodes}
-    distances[start] = 0.0
-    parents: Dict[Any, Any] = {node: None for node in G.nodes}
+    distances: Dict[Any, float] = {start: 0.0}
+    parents: Dict[Any, Any] = {start: None}
+    visited = set()
     visited_count = 0
 
     while queue:
         current_dist, current = heapq.heappop(queue)
-        if current_dist > distances.get(current, math.inf):
+        if current in visited:
             continue
+        visited.add(current)
         visited_count += 1
-        if visited_count % 1000 == 0:
-            print(f"Algoritma çalışıyor... İncelenen düğüm sayısı: {visited_count}")
         if current == end:
             break
 
         for neighbor in G.neighbors(current):
-            new_dist = current_dist + get_dist(G, current, neighbor)
+            weight = get_dist(G, current, neighbor)
+            new_dist = current_dist + weight
             if new_dist < distances.get(neighbor, math.inf):
                 distances[neighbor] = new_dist
                 parents[neighbor] = current
                 heapq.heappush(queue, (new_dist, neighbor))
 
-    if distances[end] == math.inf:
+    total_dist = distances.get(end, math.inf)
+    if total_dist == math.inf:
         return [], visited_count, math.inf
 
     path = _reconstruct_path(parents, end)
-    return path, visited_count, distances[end]
+    return path, visited_count, total_dist
 
 
 def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
     """A* search with Euclidean heuristic; returns (path, visited_count, total_dist)."""
 
     queue: List[Tuple[float, Any]] = [(0.0, start)]
-    g_score: Dict[Any, float] = {node: math.inf for node in G.nodes}
-    g_score[start] = 0.0
-    parents: Dict[Any, Any] = {node: None for node in G.nodes}
+    g_score: Dict[Any, float] = {start: 0.0}
+    parents: Dict[Any, Any] = {start: None}
+    visited = set()
     visited_count = 0
 
     while queue:
         _, current = heapq.heappop(queue)
+        if current in visited:
+            continue
+        visited.add(current)
         visited_count += 1
-        if visited_count % 1000 == 0:
-            print(f"Algoritma çalışıyor... İncelenen düğüm sayısı: {visited_count}")
         if current == end:
             break
 
@@ -97,8 +103,9 @@ def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
                 f_score = tentative_g + heuristic(G, neighbor, end)
                 heapq.heappush(queue, (f_score, neighbor))
 
-    if g_score[end] == math.inf:
+    total_dist = g_score.get(end, math.inf)
+    if total_dist == math.inf:
         return [], visited_count, math.inf
 
     path = _reconstruct_path(parents, end)
-    return path, visited_count, g_score[end]
+    return path, visited_count, total_dist

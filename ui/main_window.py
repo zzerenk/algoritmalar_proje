@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QTextEdit,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -179,8 +180,19 @@ class OperationWindow(QMainWindow):
             if not self.graph:
                 return
 
-            start_node = get_nearest_node(self.graph, start.lat, start.lon)
-            end_node = get_nearest_node(self.graph, end.lat, end.lon)
+            try:
+                start_node = get_nearest_node(self.graph, start.lat, start.lon)
+                end_node = get_nearest_node(self.graph, end.lat, end.lon)
+            except ValueError:
+                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+                return
+            except Exception as exc:
+                self._log(f"En yakın düğüm bulunamadı: {exc}")
+                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+                return
+            if start_node is None or end_node is None:
+                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+                return
             self.start_node = start_node
             self.end_node = end_node
             if self.current_algorithm == "astar":
@@ -193,6 +205,7 @@ class OperationWindow(QMainWindow):
                 algo_name = "Dijkstra"
 
             if not path:
+                QMessageBox.warning(self, "Uyarı", "Bu iki nokta arasında karayolu bağlantısı yok!")
                 self._log(f"{algo_name}: Yol bulunamadı.")
                 return
 
@@ -222,8 +235,15 @@ class OperationWindow(QMainWindow):
         lat, lon = self.transformer.screen_to_geo(x, y)
         try:
             node_id = get_nearest_node(self.graph, lat, lon)
+        except ValueError:
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+            return
         except Exception as exc:
             self._log(f"En yakın düğüm bulunamadı: {exc}")
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+            return
+        if node_id is None:
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
             return
 
         if self._pick_mode == "start":

@@ -140,7 +140,7 @@ def get_nearest_edge_point(graph: Any, lat: float, lon: float):
 def block_area(graph: Any, lat: float, lon: float, radius_m: float = 50.0):
     """Mark edges within radius as blocked; return list of blocked (u, v, key)."""
 
-    blocked_edges = []
+    blocked_edges = set()
     try:
         from shapely.geometry import Point
         from shapely.ops import nearest_points
@@ -150,35 +150,104 @@ def block_area(graph: Any, lat: float, lon: float, radius_m: float = 50.0):
         click_pt = None
         nearest_points = None  # type: ignore
 
+    def mark_block(u, v):
+        try:
+            edge_dict = graph.get_edge_data(u, v)
+        except Exception:
+            edge_dict = None
+        if not edge_dict:
+            return
+        for k, edata in edge_dict.items():
+            if edata is None:
+                continue
+            if "orig_length" not in edata and "length" in edata:
+                edata["orig_length"] = edata.get("length")
+            edata["blocked"] = True
+            edata["weight"] = float("inf")
+            blocked_edges.add((u, v, k))
+
     edges = list(graph.edges(keys=True, data=True))
     for u, v, key, data in edges:
         dist = float("inf")
-        if click_pt is not None:
-            geom = data.get("geometry")
-            if geom is not None and nearest_points is not None:
-                try:
-                    nearest_on = nearest_points(click_pt, geom)[1]
-                    dist = _haversine(lat, lon, nearest_on.y, nearest_on.x)
-                except Exception:
-                    dist = float("inf")
+        geom = data.get("geometry") if isinstance(data, dict) else None
+        if click_pt is not None and geom is not None and nearest_points is not None:
+            try:
+                nearest_on = nearest_points(click_pt, geom)[1]
+                dist = _haversine(lat, lon, nearest_on.y, nearest_on.x)
+            except Exception:
+                dist = float("inf")
         if dist == float("inf"):
             try:
                 n1 = graph.nodes[u]
                 n2 = graph.nodes[v]
-                d1 = _haversine(lat, lon, n1.get("y"), n1.get("x"))
-                d2 = _haversine(lat, lon, n2.get("y"), n2.get("x"))
-                dist = min(d1, d2)
+                mid_lat = (n1.get("y") + n2.get("y")) / 2
+                mid_lon = (n1.get("x") + n2.get("x")) / 2
+                dist = _haversine(lat, lon, mid_lat, mid_lon)
             except Exception:
                 dist = float("inf")
         if dist <= radius_m:
-            edge_data = graph.get_edge_data(u, v, key)
-            if edge_data is None:
+            # Block both directions and all parallel edges between the pair.
+            mark_block(u, v)
+            mark_block(v, u)
+
+    return list(blocked_edges)
+
+
+def apply_damage_area(graph: Any, center_lat: float, center_lon: float, radius_m: float = 50.0):
+    """Block all edges intersecting a damage circle centered at (lat, lon)."""
+
+    if graph is None:
+        return []
+
+    blocked_edges = set()
+    try:
+        from shapely.geometry import Point
+        from shapely.ops import nearest_points
+
+        center_pt = Point(center_lon, center_lat)
+    except Exception:
+        center_pt = None
+        nearest_points = None  # type: ignore
+
+    def mark_block(u, v):
+        try:
+            edge_dict = graph.get_edge_data(u, v)
+        except Exception:
+            edge_dict = None
+        if not edge_dict:
+            return
+        for k, edata in edge_dict.items():
+            if edata is None:
                 continue
-            if "orig_length" not in edge_data and "length" in edge_data:
-                edge_data["orig_length"] = edge_data.get("length")
-            edge_data["blocked"] = True
-            blocked_edges.append((u, v, key))
-    return blocked_edges
+            if "orig_length" not in edata and "length" in edata:
+                edata["orig_length"] = edata.get("length")
+            edata["blocked"] = True
+            edata["weight"] = float("inf")
+            blocked_edges.add((u, v, k))
+
+    for u, v, key, data in list(graph.edges(keys=True, data=True)):
+        dist = float("inf")
+        geom = data.get("geometry") if isinstance(data, dict) else None
+        if center_pt is not None and geom is not None and nearest_points is not None:
+            try:
+                nearest_on = nearest_points(center_pt, geom)[1]
+                dist = _haversine(center_lat, center_lon, nearest_on.y, nearest_on.x)
+            except Exception:
+                dist = float("inf")
+        if dist == float("inf"):
+            try:
+                n1 = graph.nodes[u]
+                n2 = graph.nodes[v]
+                mid_lat = (n1.get("y") + n2.get("y")) / 2
+                mid_lon = (n1.get("x") + n2.get("x")) / 2
+                dist = _haversine(center_lat, center_lon, mid_lat, mid_lon)
+            except Exception:
+                dist = float("inf")
+        if dist <= radius_m:
+            mark_block(u, v)
+            mark_block(v, u)
+
+    return list(blocked_edges)
 
 
 def reset_graph_weights(graph: Any) -> None:
@@ -191,6 +260,32 @@ def reset_graph_weights(graph: Any) -> None:
             data.pop("blocked", None)
         if "orig_length" in data:
             data["length"] = data.get("orig_length")
+
+
+def reset_graph_state(graph: Any) -> None:
+    """Fully reset edge state: clear block flags and restore weights/lengths."""
+
+    if graph is None:
+        return
+
+    for _, _, _, data in graph.edges(keys=True, data=True):
+        # Clear blocked flag
+        if data.get("blocked"):
+            data.pop("blocked", None)
+
+        # Restore base length
+        base_len = None
+        if "orig_length" in data:
+            base_len = data.get("orig_length")
+        elif "length" in data:
+            base_len = data.get("length")
+
+        if base_len is not None:
+            data["length"] = base_len
+            data["weight"] = base_len
+        else:
+            # If no length info, drop weight to avoid stale infinities
+            data.pop("weight", None)
 
 
 def simulate_scattered_damage(graph: Any, count: int = 10):

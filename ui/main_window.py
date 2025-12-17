@@ -24,7 +24,9 @@ from core.data_manager import (
     load_buildings,
     load_graph,
     block_area,
+    apply_damage_area,
     reset_graph_weights,
+    reset_graph_state,
     simulate_scattered_damage,
 )
 from ui.map_canvas import InteractiveMap
@@ -53,6 +55,7 @@ class OperationWindow(QMainWindow):
         self.end_click_coord = None
         self.start_road_point = None
         self.end_road_point = None
+        self.damage_active = False
 
         self.operations_page = self._build_operations_page()
         self.analysis_page = self._build_analysis_page()
@@ -211,6 +214,11 @@ class OperationWindow(QMainWindow):
         try:
             if not self._resolve_route_inputs(start, end):
                 return
+
+            # Clear stale damage/weights unless a disaster scenario is active.
+            if not self.damage_active:
+                reset_graph_state(self.graph)
+
             if self.current_algorithm == "astar":
                 path, visited, total_dist, success = astar_search(
                     self.graph, self.start_node, self.end_node
@@ -237,6 +245,16 @@ class OperationWindow(QMainWindow):
             )
             real_total_dist = total_dist + walk_start + walk_end
 
+            end_road_pos = None
+            if success:
+                end_road_pos = self.end_road_point
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Uyarı",
+                    "Target is isolated! Route calculated to the nearest safe point.",
+                )
+
             self.map_view.draw_path(
                 self.graph,
                 path,
@@ -248,23 +266,9 @@ class OperationWindow(QMainWindow):
                 end_click_point=self.end_click_coord,
                 end_road_point=self.end_road_point,
                 end_node=self.end_node,
+                end_road_pos=end_road_pos,
+                success=success,
             )
-            if not success:
-                try:
-                    last_node = path[-1]
-                    ndata = self.graph.nodes[last_node]
-                    self.map_view.draw_dotted_connector(
-                        self.transformer,
-                        (ndata.get("y"), ndata.get("x")),
-                        self.end_click_coord,
-                    )
-                except Exception:
-                    pass
-                QMessageBox.warning(
-                    self,
-                    "Uyarı",
-                    "Hedef tamamen izole durumda! En yakın güvenli noktaya rota oluşturuldu.",
-                )
             self._log(
                 f"{algo_name}: düğüm={len(path)} ziyaret={visited} mesafe={real_total_dist:.1f} m"
             )
@@ -344,8 +348,11 @@ class OperationWindow(QMainWindow):
 
         lat, lon = self.transformer.screen_to_geo(x, y)
         try:
-            blocked_edges = block_area(self.graph, lat, lon)
-            self.map_view.draw_damage_marker(x, y)
+            radius = 50.0
+            blocked_edges = apply_damage_area(self.graph, lat, lon, radius)
+            self.map_view.draw_damage_circle(self.transformer, lat, lon, radius)
+            if blocked_edges:
+                self.damage_active = True
             self._log(f"Hasar uygulandı: {len(blocked_edges)} kenar kapatıldı.")
         except Exception as exc:
             self._log(f"Hasar uygulanamadı: {exc}")
@@ -356,6 +363,7 @@ class OperationWindow(QMainWindow):
             return
         self.map_view.clear_damages()
         reset_graph_weights(self.graph)
+        self.damage_active = False
         try:
             self.run_algorithm()
         except Exception:
@@ -419,17 +427,18 @@ class OperationWindow(QMainWindow):
         self.map_view.clear_damages()
         self.map_view.clear_route()
         reset_graph_weights(self.graph)
+        self.damage_active = True  # Simulation will keep damage state active
 
         # Apply scattered micro damages first so ghost path can show red overlaps.
         damages = simulate_scattered_damage(self.graph, count=10)
         total_blocked = 0
-        for lat, lon, _radius, blocked_edges in damages:
+        for lat, lon, radius, _ in damages:
+            blocked_edges = apply_damage_area(self.graph, lat, lon, radius)
+            total_blocked += len(blocked_edges)
             try:
-                dx, dy = self.transformer.geo_to_screen(lat, lon)
-                self.map_view.draw_damage_marker(dx, dy)
+                self.map_view.draw_damage_circle(self.transformer, lat, lon, radius)
             except Exception:
                 pass
-            total_blocked += len(blocked_edges)
 
         # Baseline (ghost) path ignoring damage but colored where blocked.
         if self.current_algorithm == "astar":
@@ -471,6 +480,16 @@ class OperationWindow(QMainWindow):
         walk_end = self._walk_distance(self.end_click_coord, self.end_road_point, self.end_node)
         real_total_dist = total_dist + walk_start + walk_end
 
+        end_road_pos = None
+        if success:
+            end_road_pos = self.end_road_point
+        else:
+            QMessageBox.warning(
+                self,
+                "Uyarı",
+                "Target is isolated! Route calculated to the nearest safe point.",
+            )
+
         self.map_view.draw_path(
             self.graph,
             path,
@@ -482,24 +501,10 @@ class OperationWindow(QMainWindow):
             end_click_point=self.end_click_coord,
             end_road_point=self.end_road_point,
             end_node=self.end_node,
+            end_road_pos=end_road_pos,
+            success=success,
             clear_existing=False,
         )
-        if not success:
-            try:
-                last_node = path[-1]
-                ndata = self.graph.nodes[last_node]
-                self.map_view.draw_dotted_connector(
-                    self.transformer,
-                    (ndata.get("y"), ndata.get("x")),
-                    self.end_click_coord,
-                )
-            except Exception:
-                pass
-            QMessageBox.warning(
-                self,
-                "Uyarı",
-                "Hedef tamamen izole durumda! En yakın güvenli noktaya rota oluşturuldu.",
-            )
         self._log(
             f"{algo_name}: Hasar sonrası düğüm={len(path)} ziyaret={visited} mesafe={real_total_dist:.1f} m; kapalı kenar={total_blocked}"
         )

@@ -13,12 +13,14 @@ from PyQt6.QtGui import (
     QPolygonF,
     QPainterPath,
 )
+import math
 from PyQt6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
     QGraphicsPolygonItem,
     QGraphicsEllipseItem,
     QGraphicsPathItem,
+    QGraphicsRectItem,
 )
 
 
@@ -120,6 +122,8 @@ class InteractiveMap(QGraphicsView):
         end_click_point=None,
         end_road_point=None,
         end_node=None,
+        end_road_pos=None,
+        success: bool = True,
         clear_existing: bool = True,
     ) -> None:
         """Overlay path with walking (dashed) and driving (solid) legs, mark start/end."""
@@ -174,25 +178,36 @@ class InteractiveMap(QGraphicsView):
             sn = graph.nodes[start_node]
             add_walk_segment(start_road_point, (sn["y"], sn["x"]))
 
-        # End side walking: end node -> road point -> click
-        if end_node is not None:
-            en = graph.nodes[end_node]
-            add_walk_segment((en["y"], en["x"]), end_road_point)
-        add_walk_segment(end_road_point, end_click_point)
-
-        # Connect final route node to end pin to keep visual continuity.
-        if end_click_point is not None and path_list:
+        # End leg: mirror start on success; dotted red fallback on isolation.
+        last_node_id = path_list[-1]
+        if success and end_road_pos is not None:
             try:
-                last_node_id = path_list[-1]
-                lx, ly = transformer.geo_to_screen(
-                    graph.nodes[last_node_id]["y"], graph.nodes[last_node_id]["x"]
-                )
+                en_lat, en_lon = graph.nodes[last_node_id]["y"], graph.nodes[last_node_id]["x"]
+                ex_node, ey_node = transformer.geo_to_screen(en_lat, en_lon)
+                ex_road, ey_road = transformer.geo_to_screen(end_road_pos[0], end_road_pos[1])
+                tail_drive = scene.addLine(ex_node, ey_node, ex_road, ey_road, drive_pen)
+                tail_drive.setZValue(3)
+                self.route_items.append(tail_drive)
+                add_walk_segment(end_road_pos, end_click_point)
+            except Exception:
+                add_walk_segment(end_road_point, end_click_point)
+        elif not success and end_click_point is not None:
+            try:
+                en_lat, en_lon = graph.nodes[last_node_id]["y"], graph.nodes[last_node_id]["x"]
+                ex_node, ey_node = transformer.geo_to_screen(en_lat, en_lon)
                 ex_pin, ey_pin = transformer.geo_to_screen(end_click_point[0], end_click_point[1])
-                line = scene.addLine(lx, ly, ex_pin, ey_pin, walk_pen)
-                line.setZValue(3)
+                dotted_pen = QPen(QColor("#e53935"))
+                dotted_pen.setStyle(Qt.PenStyle.DotLine)
+                dotted_pen.setWidth(2)
+                dotted_pen.setCosmetic(True)
+                dotted_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                line = scene.addLine(ex_node, ey_node, ex_pin, ey_pin, dotted_pen)
+                line.setZValue(3.2)
                 self.route_items.append(line)
             except Exception:
                 pass
+        else:
+            add_walk_segment(end_road_point, end_click_point)
 
         # Markers for start/end
         marker_pen = QPen(Qt.PenStyle.NoPen)
@@ -302,6 +317,34 @@ class InteractiveMap(QGraphicsView):
         marker.setZValue(4.5)
         scene.addItem(marker)
         self.damage_items.append(marker)
+
+    def draw_damage_circle(self, transformer, center_lat: float, center_lon: float, radius_m: float) -> None:
+        if transformer is None:
+            return
+        try:
+            cx, cy = transformer.geo_to_screen(center_lat, center_lon)
+            # Approximate radius in screen space using local degree offsets.
+            delta_lat = radius_m / 111320.0
+            denom = max(0.0001, abs(math.cos(math.radians(center_lat))))
+            delta_lon = radius_m / (111320.0 * denom)
+            rx, ry = transformer.geo_to_screen(center_lat + delta_lat, center_lon)
+            radius_px = abs(ry - cy)
+            if radius_px <= 0:
+                radius_px = 5
+        except Exception:
+            return
+
+        scene = self.scene()
+        diameter = radius_px * 2
+        circle = QGraphicsEllipseItem(cx - radius_px, cy - radius_px, diameter, diameter)
+        pen = QPen(QColor(229, 57, 53))
+        pen.setWidth(2)
+        pen.setCosmetic(True)
+        circle.setPen(pen)
+        circle.setBrush(QBrush(QColor(229, 57, 53, 100)))
+        circle.setZValue(4.2)
+        scene.addItem(circle)
+        self.damage_items.append(circle)
 
     def create_pin_item(self, x: float, y: float) -> QGraphicsPathItem:
         r = 8

@@ -1,0 +1,25 @@
+Algoritma Analizi Dashboard Aciklama
+==================================
+
+Bu dosya, "Analiz Et" panelindeki 4 grafigin neyi gosterdigini ozetler.
+
+1) Ziyaret Sayisi (Search Effort)
+- Ne gosterir: Algoritmanin hedefe ulasmak icin ziyaret ettigi (heaptan cikip isledigimiz) dugum sayisi.
+- Yorum: Deger kucukse, algoritma daha az arama yaparak sonuca gidiyor. A* genelde daha dusuk olabilir (iyi heuristik varsa).
+
+2) Sure (sn) (Wall-clock Time)
+- Ne gosterir: Algoritmanin calisma suresi (saniye). CPU suresi veya altyapiya bagli gecikmeler dahil toplam gecen sure.
+- Yorum: Dusuk sure hizli sonucu isaret eder; fakat ayni donanim/senaryo karsilastirmasi anlamlidir.
+
+3) Yol Uzunlugu (m)
+- Ne gosterir: Bulunan yolun toplam uzunlugu (kenar agirliklari metre kabul edilir). Sutun etiketi toplam uzunlugu yazar. Sutun uzerinde “Doğrusal” etiketi varsa, baslangic-bitis koordinatlari arasindaki dogrusal mesafe bilgisi not olarak eklenir.
+- Yorum: Kisa yol, optimaliteyi isaret eder. Dogrusal mesafe ile karsilastirarak sapmanin buyuklugunu kavrayabilirsin.
+
+4) Detour Orani (Toplam / Dogrusal)
+- Ne gosterir: Toplam yol uzunlugunun dogrusal mesafeye orani. 1.0 ideale yakin; buyudukce yolun kivrimli/dolambacli oldugunu gosterir.
+- Yorum: A* heuristigi iyi calisiyorsa genelde detour dusuk olur.
+
+Ek Notlar
+- En uzun 3 kenar: Detour grafiginin altina kisa bir not olarak (varsa) ilgili algoritmanin en uzun kenar uzunluklari yazilir. Bu, yol icinde “darbogaz” olabilecek buyuk adimlari fark etmeye yardimci olur.
+- Grafikler annotasyonludur; degerler sutun/bar uzerinde yazili.
+- Veri yoksa veya yol bulunamazsa, grafikler sifir veya bos degerlerle guvenli sekilde guncellenir.

@@ -25,6 +25,7 @@ from core.data_manager import (
     load_graph,
     block_area,
     reset_graph_weights,
+    simulate_scattered_damage,
 )
 from ui.map_canvas import InteractiveMap
 from ui.analysis_window import AnalysisWindow
@@ -122,6 +123,9 @@ class OperationWindow(QMainWindow):
         self.reset_damage_button = QPushButton("Hasarları Temizle")
         self.reset_damage_button.clicked.connect(self._reset_damages)
 
+        self.random_disaster_button = QPushButton("Rastgele Deprem Simülasyonu")
+        self.random_disaster_button.clicked.connect(self._simulate_random_disaster)
+
         self.compute_button = QPushButton("ROTA HESAPLA")
         self.compute_button.setMinimumHeight(48)
         self.compute_button.clicked.connect(self.run_algorithm)
@@ -136,6 +140,7 @@ class OperationWindow(QMainWindow):
         vbox.addWidget(self.analysis_button)
         vbox.addWidget(self.damage_button)
         vbox.addWidget(self.reset_damage_button)
+        vbox.addWidget(self.random_disaster_button)
         vbox.addWidget(self.compute_button)
         vbox.addWidget(self.log_view, 1)
 
@@ -204,49 +209,18 @@ class OperationWindow(QMainWindow):
             return
 
         try:
-            self._ensure_graph_loaded()
-            if not self.graph:
+            if not self._resolve_route_inputs(start, end):
                 return
-
-            # Preserve click coords even for manuel giriş: girilen lat/lon'u referans al.
-            self.start_click_coord = (start.lat, start.lon)
-            self.end_click_coord = (end.lat, end.lon)
-
-            try:
-                s_proj_lat, s_proj_lon, start_node = get_nearest_edge_point(
-                    self.graph, start.lat, start.lon
-                )
-                e_proj_lat, e_proj_lon, end_node = get_nearest_edge_point(
-                    self.graph, end.lat, end.lon
-                )
-            except ValueError:
-                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
-                return
-            except Exception as exc:
-                self._log(f"En yakın yol bulunamadı: {exc}")
-                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
-                return
-
-            if start_node is None or end_node is None:
-                QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
-                return
-
-            self.start_node = start_node
-            self.end_node = end_node
-            self.start_road_point = (s_proj_lat, s_proj_lon)
-            self.end_road_point = (e_proj_lat, e_proj_lon)
-            # Update pins for manual entry as well.
-            self.map_view.update_markers(
-                self.transformer,
-                start_pos=self.start_click_coord,
-                end_pos=self.end_click_coord,
-            )
             if self.current_algorithm == "astar":
-                path, visited, total_dist = astar_search(self.graph, start_node, end_node)
+                path, visited, total_dist, success = astar_search(
+                    self.graph, self.start_node, self.end_node
+                )
                 color = "#27ae60"
                 algo_name = "A*"
             else:
-                path, visited, total_dist = dijkstra_search(self.graph, start_node, end_node)
+                path, visited, total_dist, success = dijkstra_search(
+                    self.graph, self.start_node, self.end_node
+                )
                 color = "#e74c3c"
                 algo_name = "Dijkstra"
 
@@ -255,8 +229,12 @@ class OperationWindow(QMainWindow):
                 self._log(f"{algo_name}: Yol bulunamadı.")
                 return
 
-            walk_start = self._walk_distance(self.start_click_coord, self.start_road_point, start_node)
-            walk_end = self._walk_distance(self.end_click_coord, self.end_road_point, end_node)
+            walk_start = self._walk_distance(
+                self.start_click_coord, self.start_road_point, self.start_node
+            )
+            walk_end = self._walk_distance(
+                self.end_click_coord, self.end_road_point, self.end_node
+            )
             real_total_dist = total_dist + walk_start + walk_end
 
             self.map_view.draw_path(
@@ -271,6 +249,22 @@ class OperationWindow(QMainWindow):
                 end_road_point=self.end_road_point,
                 end_node=self.end_node,
             )
+            if not success:
+                try:
+                    last_node = path[-1]
+                    ndata = self.graph.nodes[last_node]
+                    self.map_view.draw_dotted_connector(
+                        self.transformer,
+                        (ndata.get("y"), ndata.get("x")),
+                        self.end_click_coord,
+                    )
+                except Exception:
+                    pass
+                QMessageBox.warning(
+                    self,
+                    "Uyarı",
+                    "Hedef tamamen izole durumda! En yakın güvenli noktaya rota oluşturuldu.",
+                )
             self._log(
                 f"{algo_name}: düğüm={len(path)} ziyaret={visited} mesafe={real_total_dist:.1f} m"
             )
@@ -366,6 +360,149 @@ class OperationWindow(QMainWindow):
             self.run_algorithm()
         except Exception:
             pass
+
+    def _resolve_route_inputs(self, start: GeoPoint, end: GeoPoint, update_markers: bool = True) -> bool:
+        self._ensure_graph_loaded()
+        if not self.graph or not self.transformer:
+            return False
+
+        self.start_click_coord = (start.lat, start.lon)
+        self.end_click_coord = (end.lat, end.lon)
+
+        try:
+            s_proj_lat, s_proj_lon, start_node = get_nearest_edge_point(
+                self.graph, start.lat, start.lon
+            )
+            e_proj_lat, e_proj_lon, end_node = get_nearest_edge_point(
+                self.graph, end.lat, end.lon
+            )
+        except ValueError:
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+            return False
+        except Exception as exc:
+            self._log(f"En yakın yol bulunamadı: {exc}")
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+            return False
+
+        if start_node is None or end_node is None:
+            QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
+            return False
+
+        self.start_node = start_node
+        self.end_node = end_node
+        self.start_road_point = (s_proj_lat, s_proj_lon)
+        self.end_road_point = (e_proj_lat, e_proj_lon)
+
+        if update_markers:
+            self.map_view.update_markers(
+                self.transformer,
+                start_pos=self.start_click_coord,
+                end_pos=self.end_click_coord,
+            )
+        return True
+
+    def _simulate_random_disaster(self) -> None:
+        start = self._parse_point(self.start_input.text())
+        end = self._parse_point(self.end_input.text())
+
+        if not start or not end:
+            self._log("Rastgele senaryo için başlangıç/bitiş girin.")
+            return
+
+        if not self._resolve_route_inputs(start, end):
+            return
+
+        if not self.graph or not self.transformer:
+            return
+
+        # Clean previous visuals and reset graph damage flags.
+        self.map_view.clear_damages()
+        self.map_view.clear_route()
+        reset_graph_weights(self.graph)
+
+        # Apply scattered micro damages first so ghost path can show red overlaps.
+        damages = simulate_scattered_damage(self.graph, count=10)
+        total_blocked = 0
+        for lat, lon, _radius, blocked_edges in damages:
+            try:
+                dx, dy = self.transformer.geo_to_screen(lat, lon)
+                self.map_view.draw_damage_marker(dx, dy)
+            except Exception:
+                pass
+            total_blocked += len(blocked_edges)
+
+        # Baseline (ghost) path ignoring damage but colored where blocked.
+        if self.current_algorithm == "astar":
+            ghost_path, _, _, _ = astar_search(
+                self.graph, self.start_node, self.end_node, ignore_damage=True
+            )
+        else:
+            ghost_path, _, _, _ = dijkstra_search(
+                self.graph, self.start_node, self.end_node, ignore_damage=True
+            )
+        if ghost_path:
+            self.map_view.draw_ghost_path(self.graph, ghost_path, self.transformer)
+        else:
+            QMessageBox.warning(self, "Uyarı", "Hasar öncesi yol bulunamadı.")
+            return
+
+        # Now compute damaged path (actual route).
+        if self.current_algorithm == "astar":
+            path, visited, total_dist, success = astar_search(
+                self.graph, self.start_node, self.end_node
+            )
+            color = "#27ae60"
+            algo_name = "A*"
+        else:
+            path, visited, total_dist, success = dijkstra_search(
+                self.graph, self.start_node, self.end_node
+            )
+            color = "#e74c3c"
+            algo_name = "Dijkstra"
+
+        if not path:
+            QMessageBox.warning(self, "Uyarı", "Hasar sonrası ulaşılabilir yol bulunamadı!")
+            self._log(f"{algo_name}: Hasar sonrası rota yok; kapalı kenar={total_blocked}.")
+            return
+
+        walk_start = self._walk_distance(
+            self.start_click_coord, self.start_road_point, self.start_node
+        )
+        walk_end = self._walk_distance(self.end_click_coord, self.end_road_point, self.end_node)
+        real_total_dist = total_dist + walk_start + walk_end
+
+        self.map_view.draw_path(
+            self.graph,
+            path,
+            color,
+            self.transformer,
+            start_click_point=self.start_click_coord,
+            start_road_point=self.start_road_point,
+            start_node=self.start_node,
+            end_click_point=self.end_click_coord,
+            end_road_point=self.end_road_point,
+            end_node=self.end_node,
+            clear_existing=False,
+        )
+        if not success:
+            try:
+                last_node = path[-1]
+                ndata = self.graph.nodes[last_node]
+                self.map_view.draw_dotted_connector(
+                    self.transformer,
+                    (ndata.get("y"), ndata.get("x")),
+                    self.end_click_coord,
+                )
+            except Exception:
+                pass
+            QMessageBox.warning(
+                self,
+                "Uyarı",
+                "Hedef tamamen izole durumda! En yakın güvenli noktaya rota oluşturuldu.",
+            )
+        self._log(
+            f"{algo_name}: Hasar sonrası düğüm={len(path)} ziyaret={visited} mesafe={real_total_dist:.1f} m; kapalı kenar={total_blocked}"
+        )
 
     def _log(self, message: str) -> None:
         self.log_view.append(message)

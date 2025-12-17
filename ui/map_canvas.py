@@ -120,6 +120,7 @@ class InteractiveMap(QGraphicsView):
         end_click_point=None,
         end_road_point=None,
         end_node=None,
+        clear_existing: bool = True,
     ) -> None:
         """Overlay path with walking (dashed) and driving (solid) legs, mark start/end."""
 
@@ -128,8 +129,8 @@ class InteractiveMap(QGraphicsView):
 
         scene = self.scene()
 
-        # Clear only previous route visuals; keep damages.
-        self.clear_route()
+        if clear_existing:
+            self.clear_route()
 
         # Driving leg: solid main path.
         painter_path = QPainterPath()
@@ -178,6 +179,20 @@ class InteractiveMap(QGraphicsView):
             en = graph.nodes[end_node]
             add_walk_segment((en["y"], en["x"]), end_road_point)
         add_walk_segment(end_road_point, end_click_point)
+
+        # Connect final route node to end pin to keep visual continuity.
+        if end_click_point is not None and path_list:
+            try:
+                last_node_id = path_list[-1]
+                lx, ly = transformer.geo_to_screen(
+                    graph.nodes[last_node_id]["y"], graph.nodes[last_node_id]["x"]
+                )
+                ex_pin, ey_pin = transformer.geo_to_screen(end_click_point[0], end_click_point[1])
+                line = scene.addLine(lx, ly, ex_pin, ey_pin, walk_pen)
+                line.setZValue(3)
+                self.route_items.append(line)
+            except Exception:
+                pass
 
         # Markers for start/end
         marker_pen = QPen(Qt.PenStyle.NoPen)
@@ -341,3 +356,52 @@ class InteractiveMap(QGraphicsView):
             except Exception:
                 continue
         self.damage_items = []
+
+    def draw_ghost_path(self, graph, path_list, transformer) -> None:
+        if not graph or not transformer or not path_list or len(path_list) < 2:
+            return
+        scene = self.scene()
+        # Do not clear route; ghost overlays with existing.
+        for u, v in zip(path_list, path_list[1:]):
+            try:
+                x1, y1 = transformer.geo_to_screen(graph.nodes[u]["y"], graph.nodes[u]["x"])
+                x2, y2 = transformer.geo_to_screen(graph.nodes[v]["y"], graph.nodes[v]["x"])
+            except Exception:
+                continue
+
+            edge_info = graph.get_edge_data(u, v) or graph.get_edge_data(v, u)
+            blocked = False
+            if edge_info:
+                try:
+                    blocked = any(data.get("blocked", False) for data in edge_info.values())
+                except Exception:
+                    blocked = False
+
+            pen = QPen(QColor("#e53935" if blocked else "#555555"))
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setWidth(3)
+            pen.setCosmetic(True)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+            segment = scene.addLine(x1, y1, x2, y2, pen)
+            segment.setOpacity(0.8 if blocked else 0.5)
+            segment.setZValue(2.5)
+            self.route_items.append(segment)
+
+    def draw_dotted_connector(self, transformer, start_geo, end_geo) -> None:
+        if transformer is None or start_geo is None or end_geo is None:
+            return
+        try:
+            x1, y1 = transformer.geo_to_screen(start_geo[0], start_geo[1])
+            x2, y2 = transformer.geo_to_screen(end_geo[0], end_geo[1])
+        except Exception:
+            return
+        scene = self.scene()
+        pen = QPen(QColor("#e53935"))
+        pen.setStyle(Qt.PenStyle.DotLine)
+        pen.setWidth(2)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line = scene.addLine(x1, y1, x2, y2, pen)
+        line.setZValue(3.2)
+        self.route_items.append(line)

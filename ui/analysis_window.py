@@ -30,12 +30,12 @@ class AnalysisWindow(QWidget):
 
         # Dijkstra
         t0 = time.perf_counter()
-        path_d, visit_d, len_d = dijkstra_search(graph, start_node, end_node)
+        path_d, visit_d, len_d, _ = dijkstra_search(graph, start_node, end_node)
         time_d = time.perf_counter() - t0
 
         # A*
         t1 = time.perf_counter()
-        path_a, visit_a, len_a = astar_search(graph, start_node, end_node)
+        path_a, visit_a, len_a, _ = astar_search(graph, start_node, end_node)
         time_a = time.perf_counter() - t1
 
         self._plot_metrics(visit_d, visit_a, time_d, time_a)

@@ -43,14 +43,21 @@ def _reconstruct_path(parents: Dict[Any, Any], end: Any) -> List[Any]:
     return path
 
 
-def dijkstra_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
-    """Dijkstra shortest path; returns (path, visited_count, total_dist)."""
+def dijkstra_search(
+    G: Any, start: Any, end: Any, ignore_damage: bool = False
+) -> tuple[List[Any], int, float, bool]:
+    """Dijkstra shortest path; returns (path, visited_count, total_dist, success).
+
+    ignore_damage lets us preview original routes without considering blocked edges.
+    If unreachable, falls back to the visited node closest (euclidean) to target.
+    """
 
     queue: List[Tuple[float, Any]] = [(0.0, start)]
     distances: Dict[Any, float] = {start: 0.0}
     parents: Dict[Any, Any] = {start: None}
     visited = set()
     visited_count = 0
+    success = False
 
     while queue:
         current_dist, current = heapq.heappop(queue)
@@ -59,13 +66,14 @@ def dijkstra_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float
         visited.add(current)
         visited_count += 1
         if current == end:
+            success = True
             break
 
         for neighbor in G.neighbors(current):
             edge_info = G.get_edge_data(current, neighbor)
             if edge_info:
                 first_edge = next(iter(edge_info.values()))
-                if first_edge.get("blocked", False):
+                if first_edge.get("blocked", False) and not ignore_damage:
                     continue
             weight = get_dist(G, current, neighbor)
             new_dist = current_dist + weight
@@ -74,22 +82,30 @@ def dijkstra_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float
                 parents[neighbor] = current
                 heapq.heappush(queue, (new_dist, neighbor))
 
-    total_dist = distances.get(end, math.inf)
-    if total_dist == math.inf:
-        return [], visited_count, math.inf
+    if not visited:
+        return [], visited_count, math.inf, False
 
-    path = _reconstruct_path(parents, end)
-    return path, visited_count, total_dist
+    target_node = end if success else min(visited, key=lambda n: heuristic(G, n, end))
+    total_dist = distances.get(target_node, math.inf)
+    path = _reconstruct_path(parents, target_node)
+    return path, visited_count, total_dist, success
 
 
-def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
-    """A* search with Euclidean heuristic; returns (path, visited_count, total_dist)."""
+def astar_search(
+    G: Any, start: Any, end: Any, ignore_damage: bool = False
+) -> tuple[List[Any], int, float, bool]:
+    """A* search with Euclidean heuristic; returns (path, visited_count, total_dist, success).
+
+    ignore_damage lets us preview original routes without considering blocked edges.
+    If unreachable, falls back to the visited node closest (euclidean) to target.
+    """
 
     queue: List[Tuple[float, Any]] = [(0.0, start)]
     g_score: Dict[Any, float] = {start: 0.0}
     parents: Dict[Any, Any] = {start: None}
     visited = set()
     visited_count = 0
+    success = False
 
     while queue:
         _, current = heapq.heappop(queue)
@@ -98,13 +114,14 @@ def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
         visited.add(current)
         visited_count += 1
         if current == end:
+            success = True
             break
 
         for neighbor in G.neighbors(current):
             edge_info = G.get_edge_data(current, neighbor)
             if edge_info:
                 first_edge = next(iter(edge_info.values()))
-                if first_edge.get("blocked", False):
+                if first_edge.get("blocked", False) and not ignore_damage:
                     continue
             tentative_g = g_score.get(current, math.inf) + get_dist(G, current, neighbor)
             if tentative_g < g_score.get(neighbor, math.inf):
@@ -113,9 +130,10 @@ def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
                 f_score = tentative_g + heuristic(G, neighbor, end)
                 heapq.heappush(queue, (f_score, neighbor))
 
-    total_dist = g_score.get(end, math.inf)
-    if total_dist == math.inf:
-        return [], visited_count, math.inf
+    if not visited:
+        return [], visited_count, math.inf, False
 
-    path = _reconstruct_path(parents, end)
-    return path, visited_count, total_dist
+    target_node = end if success else min(visited, key=lambda n: heuristic(G, n, end))
+    total_dist = g_score.get(target_node, math.inf)
+    path = _reconstruct_path(parents, target_node)
+    return path, visited_count, total_dist, success

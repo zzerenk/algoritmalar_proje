@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Tuple, List
 
 from math import radians, sin, cos, asin, sqrt
+import random
 
 try:
     import osmnx as ox
@@ -190,6 +191,49 @@ def reset_graph_weights(graph: Any) -> None:
             data.pop("blocked", None)
         if "orig_length" in data:
             data["length"] = data.get("orig_length")
+
+
+def simulate_scattered_damage(graph: Any, count: int = 10):
+    """Scatter small debris pockets (15-20m radius) directly on road geometry.
+
+    Picks random edges, finds their midpoint (geometry-aware), and blocks around it.
+    Returns a list of tuples: (lat, lon, radius_m, blocked_edges)
+    """
+
+    if graph is None or len(graph.edges) == 0:
+        return []
+
+    all_edges = list(graph.edges(data=True))
+    if not all_edges:
+        return []
+
+    pick_count = min(count, len(all_edges))
+    chosen = random.sample(all_edges, pick_count)
+
+    results: List[tuple] = []
+    for u, v, data in chosen:
+        lat = None
+        lon = None
+        geom = data.get("geometry") if isinstance(data, dict) else None
+        if geom is not None:
+            try:
+                # Use shapely midpoint along the linestring
+                mid_pt = geom.interpolate(0.5, normalized=True)
+                lon = mid_pt.x
+                lat = mid_pt.y
+            except Exception:
+                lat = None
+                lon = None
+        if lat is None or lon is None:
+            try:
+                lat = (graph.nodes[u]["y"] + graph.nodes[v]["y"]) / 2
+                lon = (graph.nodes[u]["x"] + graph.nodes[v]["x"]) / 2
+            except Exception:
+                continue
+        radius = random.uniform(15.0, 20.0)
+        blocked = block_area(graph, lat, lon, radius)
+        results.append((lat, lon, radius, blocked))
+    return results
 
 
 def _nearest_node_haversine(graph: Any, lat: float, lon: float) -> Any:

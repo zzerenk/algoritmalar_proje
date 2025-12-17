@@ -92,8 +92,20 @@ class InteractiveMap(QGraphicsView):
         frame = scene.addRect(scene.sceneRect(), frame_pen)
         frame.setZValue(0.5)
 
-    def draw_path(self, graph, path_list, color, transformer) -> None:
-        """Overlay path, removing any previous path, and mark start/end."""
+    def draw_path(
+        self,
+        graph,
+        path_list,
+        color,
+        transformer,
+        start_click_point=None,
+        start_road_point=None,
+        start_node=None,
+        end_click_point=None,
+        end_road_point=None,
+        end_node=None,
+    ) -> None:
+        """Overlay path with walking (dashed) and driving (solid) legs, mark start/end."""
 
         if not graph or not transformer or not path_list or len(path_list) < 2:
             return
@@ -105,24 +117,51 @@ class InteractiveMap(QGraphicsView):
             if item.zValue() >= 3:
                 scene.removeItem(item)
 
+        # Driving leg: solid main path.
         painter_path = QPainterPath()
         first = path_list[0]
         x0, y0 = transformer.geo_to_screen(graph.nodes[first]["y"], graph.nodes[first]["x"])
         painter_path.moveTo(x0, y0)
-
         for node in path_list[1:]:
             x, y = transformer.geo_to_screen(graph.nodes[node]["y"], graph.nodes[node]["x"])
             painter_path.lineTo(x, y)
 
-        pen = QPen(QColor(color))
-        pen.setWidth(4)
-        pen.setCosmetic(True)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        drive_pen = QPen(QColor(color))
+        drive_pen.setWidth(4)
+        drive_pen.setCosmetic(True)
+        drive_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
 
         path_item = QGraphicsPathItem(painter_path)
-        path_item.setPen(pen)
+        path_item.setPen(drive_pen)
         path_item.setZValue(3)
         scene.addItem(path_item)
+
+        # Walking legs: dashed orange segments.
+        walk_pen = QPen(QColor("#FF5722"))
+        walk_pen.setStyle(Qt.PenStyle.DashLine)
+        walk_pen.setWidth(2)
+        walk_pen.setCosmetic(True)
+        walk_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        def add_walk_segment(p1, p2):
+            if p1 is None or p2 is None:
+                return
+            x1, y1 = transformer.geo_to_screen(p1[0], p1[1])
+            x2, y2 = transformer.geo_to_screen(p2[0], p2[1])
+            line = scene.addLine(x1, y1, x2, y2, walk_pen)
+            line.setZValue(3)
+
+        # Start side walking: click -> road point -> start node
+        add_walk_segment(start_click_point, start_road_point)
+        if start_node is not None:
+            sn = graph.nodes[start_node]
+            add_walk_segment(start_road_point, (sn["y"], sn["x"]))
+
+        # End side walking: end node -> road point -> click
+        if end_node is not None:
+            en = graph.nodes[end_node]
+            add_walk_segment((en["y"], en["x"]), end_road_point)
+        add_walk_segment(end_road_point, end_click_point)
 
         # Markers for start/end
         marker_pen = QPen(Qt.PenStyle.NoPen)

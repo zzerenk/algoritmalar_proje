@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Tuple
 
+from math import radians, sin, cos, asin, sqrt
+
 try:
     import osmnx as ox
 except ImportError:  # pragma: no cover - optional dependency
@@ -83,6 +85,57 @@ def get_nearest_node(graph: Any, lat: float, lon: float, max_distance_m: float =
     return node_id
 
 
+def get_nearest_edge_point(graph: Any, lat: float, lon: float):
+    """Return nearest road point on an edge and the closer endpoint node id.
+
+    Returns (projected_lat, projected_lon, target_node_id) or raises on failure.
+    """
+
+    if ox is None:
+        raise ImportError("osmnx is required for get_nearest_edge_point")
+
+    try:
+        # nearest_edges expects (X=lon, Y=lat)
+        u, v, key = ox.nearest_edges(graph, lon, lat)
+    except Exception as exc:
+        raise ValueError(f"En yakın yol bulunamadı: {exc}") from exc
+
+    edge_data = graph.get_edge_data(u, v, key)
+    if edge_data is None:
+        raise ValueError("Edge verisi bulunamadı")
+
+    geom = edge_data.get("geometry")
+    if geom is None:
+        from shapely.geometry import LineString
+
+        try:
+            geom = LineString(
+                [
+                    (graph.nodes[u]["x"], graph.nodes[u]["y"]),
+                    (graph.nodes[v]["x"], graph.nodes[v]["y"]),
+                ]
+            )
+        except Exception as exc:
+            raise ValueError(f"Edge geometrisi oluşturulamadı: {exc}") from exc
+
+    try:
+        from shapely.geometry import Point
+        from shapely.ops import nearest_points
+    except Exception as exc:
+        raise ImportError("shapely is required for get_nearest_edge_point") from exc
+
+    click_point = Point(lon, lat)
+    nearest_on_edge = nearest_points(click_point, geom)[1]
+    proj_lon, proj_lat = nearest_on_edge.x, nearest_on_edge.y
+
+    # Pick closer endpoint of the edge.
+    du = _haversine(proj_lat, proj_lon, graph.nodes[u]["y"], graph.nodes[u]["x"])
+    dv = _haversine(proj_lat, proj_lon, graph.nodes[v]["y"], graph.nodes[v]["x"])
+    target_node = u if du <= dv else v
+
+    return proj_lat, proj_lon, target_node
+
+
 def _nearest_node_haversine(graph: Any, lat: float, lon: float) -> Any:
     """Naive nearest neighbor using haversine distance over all nodes."""
 
@@ -101,8 +154,6 @@ def _nearest_node_haversine(graph: Any, lat: float, lon: float) -> Any:
 
 
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    from math import radians, sin, cos, asin, sqrt
-
     R = 6371000.0
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)

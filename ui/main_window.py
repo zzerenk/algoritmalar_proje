@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 from config import DEFAULT_LOCATION, WINDOW_SIZE, WINDOW_TITLE
 from core.algorithms import astar_search, dijkstra_search
 from core.coordinate_sys import CoordinateTransformer, GeoPoint
-from core.data_manager import get_nearest_node, load_buildings, load_graph
+from core.data_manager import get_nearest_edge_point, load_buildings, load_graph
 from ui.map_canvas import InteractiveMap
 from ui.analysis_window import AnalysisWindow
 
@@ -42,6 +42,10 @@ class OperationWindow(QMainWindow):
         self._pick_mode = None  # "start" or "end"
         self.start_node = None
         self.end_node = None
+        self.start_click_coord = None
+        self.end_click_coord = None
+        self.start_road_point = None
+        self.end_road_point = None
 
         self.operations_page = self._build_operations_page()
         self.analysis_page = self._build_analysis_page()
@@ -180,21 +184,33 @@ class OperationWindow(QMainWindow):
             if not self.graph:
                 return
 
+            # Preserve click coords even for manuel giriş: girilen lat/lon'u referans al.
+            self.start_click_coord = (start.lat, start.lon)
+            self.end_click_coord = (end.lat, end.lon)
+
             try:
-                start_node = get_nearest_node(self.graph, start.lat, start.lon)
-                end_node = get_nearest_node(self.graph, end.lat, end.lon)
+                s_proj_lat, s_proj_lon, start_node = get_nearest_edge_point(
+                    self.graph, start.lat, start.lon
+                )
+                e_proj_lat, e_proj_lon, end_node = get_nearest_edge_point(
+                    self.graph, end.lat, end.lon
+                )
             except ValueError:
                 QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
                 return
             except Exception as exc:
-                self._log(f"En yakın düğüm bulunamadı: {exc}")
+                self._log(f"En yakın yol bulunamadı: {exc}")
                 QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
                 return
+
             if start_node is None or end_node is None:
                 QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
                 return
+
             self.start_node = start_node
             self.end_node = end_node
+            self.start_road_point = (s_proj_lat, s_proj_lon)
+            self.end_road_point = (e_proj_lat, e_proj_lon)
             if self.current_algorithm == "astar":
                 path, visited, total_dist = astar_search(self.graph, start_node, end_node)
                 color = "#27ae60"
@@ -209,9 +225,24 @@ class OperationWindow(QMainWindow):
                 self._log(f"{algo_name}: Yol bulunamadı.")
                 return
 
-            self.map_view.draw_path(self.graph, path, color, self.transformer)
+            walk_start = self._walk_distance(self.start_click_coord, self.start_road_point, start_node)
+            walk_end = self._walk_distance(self.end_click_coord, self.end_road_point, end_node)
+            real_total_dist = total_dist + walk_start + walk_end
+
+            self.map_view.draw_path(
+                self.graph,
+                path,
+                color,
+                self.transformer,
+                start_click_point=self.start_click_coord,
+                start_road_point=self.start_road_point,
+                start_node=self.start_node,
+                end_click_point=self.end_click_coord,
+                end_road_point=self.end_road_point,
+                end_node=self.end_node,
+            )
             self._log(
-                f"{algo_name}: düğüm={len(path)} ziyaret={visited} mesafe={total_dist:.1f} m"
+                f"{algo_name}: düğüm={len(path)} ziyaret={visited} mesafe={real_total_dist:.1f} m"
             )
         except Exception as exc:  # pragma: no cover - user environment dependent
             self._log(f"Rota hesaplanamadı: {exc}")
@@ -234,12 +265,12 @@ class OperationWindow(QMainWindow):
 
         lat, lon = self.transformer.screen_to_geo(x, y)
         try:
-            node_id = get_nearest_node(self.graph, lat, lon)
+            proj_lat, proj_lon, node_id = get_nearest_edge_point(self.graph, lat, lon)
         except ValueError:
             QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
             return
         except Exception as exc:
-            self._log(f"En yakın düğüm bulunamadı: {exc}")
+            self._log(f"En yakın yol bulunamadı: {exc}")
             QMessageBox.warning(self, "Uyarı", "Lütfen bir yola yakın tıklayın!")
             return
         if node_id is None:
@@ -249,9 +280,13 @@ class OperationWindow(QMainWindow):
         if self._pick_mode == "start":
             self.start_input.setText(f"{lat:.6f}, {lon:.6f}")
             self.start_node = node_id
+            self.start_click_coord = (lat, lon)
+            self.start_road_point = (proj_lat, proj_lon)
         else:
             self.end_input.setText(f"{lat:.6f}, {lon:.6f}")
             self.end_node = node_id
+            self.end_click_coord = (lat, lon)
+            self.end_road_point = (proj_lat, proj_lon)
 
         self._log(f"Seçildi ({self._pick_mode}): düğüm={node_id} lat={lat:.6f} lon={lon:.6f}")
         self._pick_mode = None
@@ -266,5 +301,27 @@ class OperationWindow(QMainWindow):
 
     def _log(self, message: str) -> None:
         self.log_view.append(message)
+
+    def _walk_distance(self, click_coord, road_point, node_id) -> float:
+        if click_coord is None or road_point is None or node_id is None:
+            return 0.0
+        try:
+            nlat = self.graph.nodes[node_id].get("y")
+            nlon = self.graph.nodes[node_id].get("x")
+            seg1 = self._haversine(click_coord[0], click_coord[1], road_point[0], road_point[1])
+            seg2 = self._haversine(road_point[0], road_point[1], nlat, nlon)
+            return seg1 + seg2
+        except Exception:
+            return 0.0
+
+    def _haversine(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        from math import radians, sin, cos, asin, sqrt
+
+        R = 6371000.0
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        return R * c
 
     # Rendering moved to map_canvas render_map

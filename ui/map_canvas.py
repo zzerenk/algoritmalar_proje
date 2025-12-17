@@ -25,6 +25,10 @@ from PyQt6.QtWidgets import (
 class InteractiveMap(QGraphicsView):
     coordinateClicked = pyqtSignal(float, float)
     map_clicked = pyqtSignal(float, float)
+    damage_requested = pyqtSignal(float, float)
+
+    MODE_NAVIGATION = 0
+    MODE_DISASTER = 1
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -35,6 +39,11 @@ class InteractiveMap(QGraphicsView):
         self._zoom = 0
         self._click_marker = None
         self._click_enabled = False
+        self.mode = self.MODE_NAVIGATION
+        self.route_items = []
+        self.damage_items = []
+        self.start_pin = None
+        self.end_pin = None
 
     def render_map(self, graph, buildings, transformer) -> None:
         """Render buildings, roads, and nodes with z-ordering."""
@@ -92,6 +101,13 @@ class InteractiveMap(QGraphicsView):
         frame = scene.addRect(scene.sceneRect(), frame_pen)
         frame.setZValue(0.5)
 
+    def set_mode(self, mode_code: int) -> None:
+        self.mode = mode_code
+        if self.mode == self.MODE_DISASTER:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
     def draw_path(
         self,
         graph,
@@ -112,10 +128,8 @@ class InteractiveMap(QGraphicsView):
 
         scene = self.scene()
 
-        # Remove previous path/markers (z >= 3 used for overlays).
-        for item in list(scene.items()):
-            if item.zValue() >= 3:
-                scene.removeItem(item)
+        # Clear only previous route visuals; keep damages.
+        self.clear_route()
 
         # Driving leg: solid main path.
         painter_path = QPainterPath()
@@ -135,9 +149,10 @@ class InteractiveMap(QGraphicsView):
         path_item.setPen(drive_pen)
         path_item.setZValue(3)
         scene.addItem(path_item)
+        self.route_items.append(path_item)
 
-        # Walking legs: dashed orange segments.
-        walk_pen = QPen(QColor("#FF5722"))
+        # Walking legs: dashed cyan segments.
+        walk_pen = QPen(QColor("#00FFFF"))
         walk_pen.setStyle(Qt.PenStyle.DashLine)
         walk_pen.setWidth(2)
         walk_pen.setCosmetic(True)
@@ -150,6 +165,7 @@ class InteractiveMap(QGraphicsView):
             x2, y2 = transformer.geo_to_screen(p2[0], p2[1])
             line = scene.addLine(x1, y1, x2, y2, walk_pen)
             line.setZValue(3)
+            self.route_items.append(line)
 
         # Start side walking: click -> road point -> start node
         add_walk_segment(start_click_point, start_road_point)
@@ -180,12 +196,14 @@ class InteractiveMap(QGraphicsView):
         start_marker.setBrush(marker_brush_start)
         start_marker.setZValue(4)
         scene.addItem(start_marker)
+        self.route_items.append(start_marker)
 
         end_marker = QGraphicsEllipseItem(ex - half, ey - half, size, size)
         end_marker.setPen(marker_pen)
         end_marker.setBrush(marker_brush_end)
         end_marker.setZValue(4)
         scene.addItem(end_marker)
+        self.route_items.append(end_marker)
 
     def _polygon_items_from_geom(self, geom, transformer, brush, pen):
         try:
@@ -228,13 +246,14 @@ class InteractiveMap(QGraphicsView):
         self.scale(zoom_factor, zoom_factor)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._click_enabled:
+        if event.button() == Qt.MouseButton.LeftButton:
             scene_pos: QPointF = self.mapToScene(event.position().toPoint())
-            self.coordinateClicked.emit(scene_pos.x(), scene_pos.y())
-            self.map_clicked.emit(scene_pos.x(), scene_pos.y())
-
-            # Visual feedback pin
-            self._draw_click_marker(scene_pos)
+            if self.mode == self.MODE_NAVIGATION and self._click_enabled:
+                self.coordinateClicked.emit(scene_pos.x(), scene_pos.y())
+                self.map_clicked.emit(scene_pos.x(), scene_pos.y())
+                self._draw_click_marker(scene_pos)
+            elif self.mode == self.MODE_DISASTER:
+                self.damage_requested.emit(scene_pos.x(), scene_pos.y())
         super().mousePressEvent(event)
 
     def set_click_enabled(self, enabled: bool) -> None:
@@ -254,3 +273,71 @@ class InteractiveMap(QGraphicsView):
         marker.setZValue(5)
         scene.addItem(marker)
         self._click_marker = marker
+
+    def draw_damage_marker(self, x: float, y: float) -> None:
+        scene = self.scene()
+        size = 16
+        half = size / 2
+        marker = QGraphicsEllipseItem(x - half, y - half, size, size)
+        pen = QPen(QColor("#e53935"))
+        pen.setCosmetic(True)
+        pen.setWidth(2)
+        marker.setPen(pen)
+        marker.setBrush(QBrush(QColor(229, 57, 53, 120)))
+        marker.setZValue(4.5)
+        scene.addItem(marker)
+        self.damage_items.append(marker)
+
+    def create_pin_item(self, x: float, y: float) -> QGraphicsPathItem:
+        r = 8
+        path = QPainterPath()
+        # Head (circle) centered above the tip
+        path.addEllipse(-r, -2 * r, 2 * r, 2 * r)
+        # Tail (pointing to origin)
+        path.moveTo(0, 0)
+        path.lineTo(-r * 0.6, -r)
+        path.lineTo(r * 0.6, -r)
+        path.closeSubpath()
+
+        item = QGraphicsPathItem(path)
+        pen = QPen(QColor("#000000"))
+        pen.setWidth(1)
+        pen.setCosmetic(True)
+        item.setPen(pen)
+        item.setBrush(QBrush(QColor("#FF0000")))
+        item.setPos(x, y)
+        item.setZValue(10)
+        return item
+
+    def update_markers(self, transformer, start_pos=None, end_pos=None) -> None:
+        scene = self.scene()
+        if start_pos is not None:
+            if self.start_pin:
+                scene.removeItem(self.start_pin)
+            sx, sy = transformer.geo_to_screen(start_pos[0], start_pos[1])
+            self.start_pin = self.create_pin_item(sx, sy)
+            scene.addItem(self.start_pin)
+        if end_pos is not None:
+            if self.end_pin:
+                scene.removeItem(self.end_pin)
+            ex, ey = transformer.geo_to_screen(end_pos[0], end_pos[1])
+            self.end_pin = self.create_pin_item(ex, ey)
+            scene.addItem(self.end_pin)
+
+    def clear_route(self) -> None:
+        scene = self.scene()
+        for item in self.route_items:
+            try:
+                scene.removeItem(item)
+            except Exception:
+                continue
+        self.route_items = []
+
+    def clear_damages(self) -> None:
+        scene = self.scene()
+        for item in self.damage_items:
+            try:
+                scene.removeItem(item)
+            except Exception:
+                continue
+        self.damage_items = []

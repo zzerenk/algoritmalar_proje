@@ -136,6 +136,62 @@ def get_nearest_edge_point(graph: Any, lat: float, lon: float):
     return proj_lat, proj_lon, target_node
 
 
+def block_area(graph: Any, lat: float, lon: float, radius_m: float = 50.0):
+    """Mark edges within radius as blocked; return list of blocked (u, v, key)."""
+
+    blocked_edges = []
+    try:
+        from shapely.geometry import Point
+        from shapely.ops import nearest_points
+
+        click_pt = Point(lon, lat)
+    except Exception:
+        click_pt = None
+        nearest_points = None  # type: ignore
+
+    edges = list(graph.edges(keys=True, data=True))
+    for u, v, key, data in edges:
+        dist = float("inf")
+        if click_pt is not None:
+            geom = data.get("geometry")
+            if geom is not None and nearest_points is not None:
+                try:
+                    nearest_on = nearest_points(click_pt, geom)[1]
+                    dist = _haversine(lat, lon, nearest_on.y, nearest_on.x)
+                except Exception:
+                    dist = float("inf")
+        if dist == float("inf"):
+            try:
+                n1 = graph.nodes[u]
+                n2 = graph.nodes[v]
+                d1 = _haversine(lat, lon, n1.get("y"), n1.get("x"))
+                d2 = _haversine(lat, lon, n2.get("y"), n2.get("x"))
+                dist = min(d1, d2)
+            except Exception:
+                dist = float("inf")
+        if dist <= radius_m:
+            edge_data = graph.get_edge_data(u, v, key)
+            if edge_data is None:
+                continue
+            if "orig_length" not in edge_data and "length" in edge_data:
+                edge_data["orig_length"] = edge_data.get("length")
+            edge_data["blocked"] = True
+            blocked_edges.append((u, v, key))
+    return blocked_edges
+
+
+def reset_graph_weights(graph: Any) -> None:
+    """Clear blocked flags and restore original lengths when available."""
+
+    if graph is None:
+        return
+    for u, v, key, data in graph.edges(keys=True, data=True):
+        if data.get("blocked"):
+            data.pop("blocked", None)
+        if "orig_length" in data:
+            data["length"] = data.get("orig_length")
+
+
 def _nearest_node_haversine(graph: Any, lat: float, lon: float) -> Any:
     """Naive nearest neighbor using haversine distance over all nodes."""
 

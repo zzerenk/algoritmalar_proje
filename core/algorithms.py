@@ -62,6 +62,11 @@ def dijkstra_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float
             break
 
         for neighbor in G.neighbors(current):
+            edge_info = G.get_edge_data(current, neighbor)
+            if edge_info:
+                first_edge = next(iter(edge_info.values()))
+                if first_edge.get("blocked", False):
+                    continue
             weight = get_dist(G, current, neighbor)
             new_dist = current_dist + weight
             if new_dist < distances.get(neighbor, math.inf):
@@ -96,6 +101,11 @@ def astar_search(G: Any, start: Any, end: Any) -> tuple[List[Any], int, float]:
             break
 
         for neighbor in G.neighbors(current):
+            edge_info = G.get_edge_data(current, neighbor)
+            if edge_info:
+                first_edge = next(iter(edge_info.values()))
+                if first_edge.get("blocked", False):
+                    continue
             tentative_g = g_score.get(current, math.inf) + get_dist(G, current, neighbor)
             if tentative_g < g_score.get(neighbor, math.inf):
                 g_score[neighbor] = tentative_g

@@ -19,7 +19,13 @@ from PyQt6.QtWidgets import (
 from config import DEFAULT_LOCATION, WINDOW_SIZE, WINDOW_TITLE
 from core.algorithms import astar_search, dijkstra_search
 from core.coordinate_sys import CoordinateTransformer, GeoPoint
-from core.data_manager import get_nearest_edge_point, load_buildings, load_graph
+from core.data_manager import (
+    get_nearest_edge_point,
+    load_buildings,
+    load_graph,
+    block_area,
+    reset_graph_weights,
+)
 from ui.map_canvas import InteractiveMap
 from ui.analysis_window import AnalysisWindow
 
@@ -75,6 +81,8 @@ class OperationWindow(QMainWindow):
         self.map_view.setMinimumWidth(int(WINDOW_SIZE[0] * 0.7))
         self.map_view.coordinateClicked.connect(self._on_map_click)
         self.map_view.map_clicked.connect(self.handle_map_click)
+        self.map_view.damage_requested.connect(self.handle_damage_request)
+        self.map_view.set_mode(self.map_view.MODE_NAVIGATION)
 
         controls = self._build_controls()
 
@@ -104,6 +112,16 @@ class OperationWindow(QMainWindow):
         self.analysis_button = QPushButton("ANALİZ ET")
         self.analysis_button.clicked.connect(lambda: self._open_analysis(True))
 
+        self.damage_button = QPushButton("Hasar Modu")
+        self.damage_button.setCheckable(True)
+        self.damage_button.setStyleSheet(
+            "QPushButton {background:#666; color:white;} QPushButton:checked {background:#e53935; color:white;}"
+        )
+        self.damage_button.toggled.connect(self._toggle_damage_mode)
+
+        self.reset_damage_button = QPushButton("Hasarları Temizle")
+        self.reset_damage_button.clicked.connect(self._reset_damages)
+
         self.compute_button = QPushButton("ROTA HESAPLA")
         self.compute_button.setMinimumHeight(48)
         self.compute_button.clicked.connect(self.run_algorithm)
@@ -116,6 +134,8 @@ class OperationWindow(QMainWindow):
         vbox.addWidget(self.end_input)
         vbox.addWidget(self.end_select_btn)
         vbox.addWidget(self.analysis_button)
+        vbox.addWidget(self.damage_button)
+        vbox.addWidget(self.reset_damage_button)
         vbox.addWidget(self.compute_button)
         vbox.addWidget(self.log_view, 1)
 
@@ -138,11 +158,15 @@ class OperationWindow(QMainWindow):
     def _enable_start_pick(self) -> None:
         self._pick_mode = "start"
         self.map_view.set_click_enabled(True)
+        self.map_view.set_mode(self.map_view.MODE_NAVIGATION)
+        self.damage_button.setChecked(False)
         self._log("Haritada başlangıç noktası seçin.")
 
     def _enable_end_pick(self) -> None:
         self._pick_mode = "end"
         self.map_view.set_click_enabled(True)
+        self.map_view.set_mode(self.map_view.MODE_NAVIGATION)
+        self.damage_button.setChecked(False)
         self._log("Haritada bitiş noktası seçin.")
 
     def _ensure_graph_loaded(self) -> None:
@@ -211,6 +235,12 @@ class OperationWindow(QMainWindow):
             self.end_node = end_node
             self.start_road_point = (s_proj_lat, s_proj_lon)
             self.end_road_point = (e_proj_lat, e_proj_lon)
+            # Update pins for manual entry as well.
+            self.map_view.update_markers(
+                self.transformer,
+                start_pos=self.start_click_coord,
+                end_pos=self.end_click_coord,
+            )
             if self.current_algorithm == "astar":
                 path, visited, total_dist = astar_search(self.graph, start_node, end_node)
                 color = "#27ae60"
@@ -291,6 +321,12 @@ class OperationWindow(QMainWindow):
         self._log(f"Seçildi ({self._pick_mode}): düğüm={node_id} lat={lat:.6f} lon={lon:.6f}")
         self._pick_mode = None
         self.map_view.set_click_enabled(False)
+        self.map_view.set_mode(self.map_view.MODE_NAVIGATION)
+        self.map_view.update_markers(
+            self.transformer,
+            start_pos=self.start_click_coord,
+            end_pos=self.end_click_coord,
+        )
 
     def _open_analysis(self, run: bool = False) -> None:
         self.stacked.setCurrentIndex(1)
@@ -298,6 +334,38 @@ class OperationWindow(QMainWindow):
             self.analysis_view.start_comparison_test(self.graph, self.start_node, self.end_node)
         elif run:
             self._log("Analiz için başlangıç ve bitiş seçin ya da rota hesaplayın.")
+
+    def _toggle_damage_mode(self, checked: bool) -> None:
+        if checked:
+            self.map_view.set_mode(self.map_view.MODE_DISASTER)
+            self.map_view.set_click_enabled(False)
+        else:
+            self.map_view.set_mode(self.map_view.MODE_NAVIGATION)
+            self.map_view.set_click_enabled(True)
+
+    def handle_damage_request(self, x: float, y: float) -> None:
+        if not self.transformer or not self.graph:
+            self._log("Harita henüz yüklenmedi.")
+            return
+
+        lat, lon = self.transformer.screen_to_geo(x, y)
+        try:
+            blocked_edges = block_area(self.graph, lat, lon)
+            self.map_view.draw_damage_marker(x, y)
+            self._log(f"Hasar uygulandı: {len(blocked_edges)} kenar kapatıldı.")
+        except Exception as exc:
+            self._log(f"Hasar uygulanamadı: {exc}")
+            QMessageBox.warning(self, "Uyarı", "Hasar işlemi başarısız oldu.")
+
+    def _reset_damages(self) -> None:
+        if self.graph is None:
+            return
+        self.map_view.clear_damages()
+        reset_graph_weights(self.graph)
+        try:
+            self.run_algorithm()
+        except Exception:
+            pass
 
     def _log(self, message: str) -> None:
         self.log_view.append(message)

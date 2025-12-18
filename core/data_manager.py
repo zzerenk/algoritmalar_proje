@@ -250,6 +250,27 @@ def apply_damage_area(graph: Any, center_lat: float, center_lon: float, radius_m
     return list(blocked_edges)
 
 
+def reset_graph_damage(graph: Any) -> None:
+    """Hard reset damage flags and weights across the entire graph."""
+
+    if graph is None:
+        return
+
+    for _, _, _, data in graph.edges(keys=True, data=True):
+        if data is None:
+            continue
+        data.pop("blocked", None)
+        if "orig_length" in data:
+            base_len = data.get("orig_length")
+        else:
+            base_len = data.get("length")
+        if base_len is not None:
+            data["length"] = base_len
+            data["weight"] = base_len
+        else:
+            data.pop("weight", None)
+
+
 def reset_graph_weights(graph: Any) -> None:
     """Clear blocked flags and restore original lengths when available."""
 

@@ -27,6 +27,7 @@ from core.data_manager import (
     apply_damage_area,
     reset_graph_weights,
     reset_graph_state,
+    reset_graph_damage,
     simulate_scattered_damage,
 )
 from ui.map_canvas import InteractiveMap
@@ -426,7 +427,7 @@ class OperationWindow(QMainWindow):
         # Clean previous visuals and reset graph damage flags.
         self.map_view.clear_damages()
         self.map_view.clear_route()
-        reset_graph_weights(self.graph)
+        reset_graph_damage(self.graph)
         self.damage_active = True  # Simulation will keep damage state active
 
         # Apply scattered micro damages first so ghost path can show red overlaps.
